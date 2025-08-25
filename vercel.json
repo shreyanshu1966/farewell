@@ -3,9 +3,5 @@
   "buildCommand": "npm run build",
   "outputDirectory": "dist",
   "devCommand": "npm run dev",
-  "installCommand": "npm install",
-  "env": {
-    "VITE_BACKEND_URL": "@backend_url",
-    "VITE_ADMIN_PASSWORD": "@admin_password"
-  }
+  "installCommand": "npm install"
 }
