@@ -1,0 +1,2 @@
+# Railway deployment configuration for backend
+web: npm start
