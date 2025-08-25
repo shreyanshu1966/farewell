@@ -11,9 +11,11 @@ Your app is now ready for deployment. All dependencies are installed and the bui
 ### Deploy Backend to Railway:
 1. Go to https://railway.app
 2. Login with GitHub
-3. Click "Deploy from GitHub repo"
-4. Select your repository and choose `/server` as root directory
-5. Add these environment variables:
+3. Click "New Project" → "Deploy from GitHub repo"
+4. Select your repository
+5. Railway will auto-detect both frontend and backend - Choose "Deploy" for the Node.js service (backend)
+6. In the service settings, set the Root Directory to `server`
+7. Add these environment variables in the Variables tab:
    - `GAME_TIMER`: 30
    - `ADMIN_PASSWORD`: admin123
    - `FRONTEND_URL`: (leave empty for now)
