@@ -3,12 +3,11 @@ import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-d
 import AdminDashboard from './components/AdminDashboard'
 import ParticipantView from './components/ParticipantView'
 import LandingPage from './components/LandingPage'
-import './App.css'
 
 function App() {
   return (
     <Router>
-      <div className="app">
+      <div className="min-h-screen">
         <Routes>
           <Route path="/" element={<LandingPage />} />
           <Route path="/admin" element={<AdminDashboard />} />

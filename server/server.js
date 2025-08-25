@@ -25,12 +25,18 @@ let gameState = {
   currentGame: null,
   isActive: false,
   round: 0,
+  totalRounds: 3,
   participants: new Map(),
   scores: new Map(),
+  teams: new Map(), // team id -> {id, name, members: [], totalScore: 0}
+  teamScores: new Map(), // team id -> score
+  teamsFormed: false,
   currentQuestion: null,
   answers: new Map(),
   timeLeft: 0,
-  gameTimer: null
+  gameTimer: null,
+  gameSequence: [], // Will store the sequence of games for 3 rounds
+  completedRounds: 0
 };
 
 // Game data
@@ -74,8 +80,31 @@ io.on('connection', (socket) => {
   // Admin joins
   socket.on('join-admin', () => {
     socket.join('admin');
-    socket.emit('game-state', gameState);
+    socket.emit('game-state', {
+      ...gameState,
+      participants: Array.from(gameState.participants.values()),
+      teams: Array.from(gameState.teams.values()),
+      teamScores: Object.fromEntries(gameState.teamScores)
+    });
     console.log('Admin joined');
+  });
+
+  // Form teams
+  socket.on('form-teams', () => {
+    if (gameState.participants.size < 3) {
+      socket.emit('error', { message: 'Need at least 3 participants to form teams' });
+      return;
+    }
+    
+    formTeams();
+    
+    // Send team information to everyone
+    io.emit('teams-formed', {
+      teams: Array.from(gameState.teams.values()),
+      teamsFormed: true
+    });
+    
+    console.log('Teams formed');
   });
 
   // Participant joins
@@ -100,38 +129,58 @@ io.on('connection', (socket) => {
       participantId,
       currentGame: gameState.currentGame,
       isActive: gameState.isActive,
-      currentQuestion: gameState.currentQuestion
+      currentQuestion: gameState.currentQuestion,
+      teamsFormed: gameState.teamsFormed,
+      teams: Array.from(gameState.teams.values())
     });
     
     // Update admin with new participant
     io.to('admin').emit('participant-update', {
       participants: Array.from(gameState.participants.values()),
-      scores: Object.fromEntries(gameState.scores)
+      scores: Object.fromEntries(gameState.scores),
+      teams: Array.from(gameState.teams.values()),
+      teamScores: Object.fromEntries(gameState.teamScores)
     });
     
     console.log(`Participant ${name} joined with ID: ${participantId}`);
   });
 
   // Start game
-  socket.on('start-game', (data) => {
-    const { gameType } = data;
-    
-    if (games[gameType]) {
-      gameState.currentGame = gameType;
-      gameState.isActive = true;
-      gameState.round = 0;
-      gameState.answers.clear();
-      
-      // Start first question
-      startNextQuestion();
-      
-      io.emit('game-started', {
-        gameType,
-        gameName: games[gameType].name
-      });
-      
-      console.log(`Game started: ${games[gameType].name}`);
+  socket.on('start-game', () => {
+    if (!gameState.teamsFormed) {
+      socket.emit('error', { message: 'Please form teams first before starting the game' });
+      return;
     }
+    
+    if (gameState.teams.size === 0) {
+      socket.emit('error', { message: 'No teams available' });
+      return;
+    }
+    
+    // Generate random game sequence for 3 rounds
+    generateGameSequence();
+    
+    gameState.isActive = true;
+    gameState.round = 0;
+    gameState.completedRounds = 0;
+    gameState.answers.clear();
+    
+    // Reset team scores
+    gameState.teamScores.clear();
+    gameState.teams.forEach((team) => {
+      gameState.teamScores.set(team.id, 0);
+    });
+    
+    // Start first round
+    startNextRound();
+    
+    io.emit('game-started', {
+      gameSequence: gameState.gameSequence,
+      totalRounds: gameState.totalRounds,
+      teams: Array.from(gameState.teams.values())
+    });
+    
+    console.log('Game started with sequence:', gameState.gameSequence);
   });
 
   // Submit answer
@@ -163,9 +212,52 @@ io.on('connection', (socket) => {
     endCurrentQuestion();
   });
 
+  // Start next question
+  socket.on('start-next-question', () => {
+    if (gameState.isActive && !gameState.currentQuestion) {
+      startNextQuestion();
+    }
+  });
+
   // End game
   socket.on('end-game', () => {
     endGame();
+  });
+
+  // Set number of rounds
+  socket.on('set-rounds', (data) => {
+    const { rounds } = data;
+    if (rounds && rounds >= 1 && rounds <= 10) {
+      gameState.totalRounds = rounds;
+      gameState.gameSequence = generateGameSequence(rounds);
+      
+      io.to('admin').emit('game-state', {
+        ...gameState,
+        participants: Array.from(gameState.participants.values()),
+        teams: Array.from(gameState.teams.values()),
+        teamScores: Object.fromEntries(gameState.teamScores)
+      });
+      
+      io.emit('rounds-updated', { totalRounds: rounds });
+      console.log(`Total rounds set to: ${rounds}`);
+    }
+  });
+
+  // Reset game completely
+  socket.on('reset-game', () => {
+    resetGame();
+    
+    // Notify all connected clients about the reset
+    io.emit('game-reset');
+    
+    io.to('admin').emit('game-state', {
+      ...gameState,
+      participants: Array.from(gameState.participants.values()),
+      teams: Array.from(gameState.teams.values()),
+      teamScores: Object.fromEntries(gameState.teamScores)
+    });
+    
+    console.log('Game completely reset by admin');
   });
 
   // Disconnect
@@ -177,7 +269,9 @@ io.on('connection', (socket) => {
       
       io.to('admin').emit('participant-update', {
         participants: Array.from(gameState.participants.values()),
-        scores: Object.fromEntries(gameState.scores)
+        scores: Object.fromEntries(gameState.scores),
+        teams: Array.from(gameState.teams.values()),
+        teamScores: Object.fromEntries(gameState.teamScores)
       });
       
       console.log(`Participant ${participant?.name} disconnected`);
@@ -186,25 +280,156 @@ io.on('connection', (socket) => {
   });
 });
 
+function formTeams() {
+  const participants = Array.from(gameState.participants.values());
+  const maxTeamSize = 3;
+  const numFullTeams = Math.floor(participants.length / maxTeamSize);
+  const remainingParticipants = participants.length % maxTeamSize;
+  
+  // Clear existing teams
+  gameState.teams.clear();
+  gameState.teamScores.clear();
+  
+  if (participants.length < 3) {
+    console.log('Not enough participants to form teams');
+    return;
+  }
+  
+  // Shuffle participants randomly
+  const shuffledParticipants = [...participants].sort(() => Math.random() - 0.5);
+  
+  let participantIndex = 0;
+  
+  // Create full teams of 3 members each
+  for (let i = 0; i < numFullTeams; i++) {
+    const teamId = `team-${i + 1}`;
+    const teamMembers = shuffledParticipants.slice(participantIndex, participantIndex + maxTeamSize);
+    participantIndex += maxTeamSize;
+    
+    const team = {
+      id: teamId,
+      name: `Team ${i + 1}`,
+      members: teamMembers,
+      totalScore: 0
+    };
+    
+    gameState.teams.set(teamId, team);
+    gameState.teamScores.set(teamId, 0);
+  }
+  
+  // Handle remaining participants (1 or 2 people)
+  if (remainingParticipants > 0 && numFullTeams > 0) {
+    // Distribute remaining participants to existing teams (ensuring no team exceeds 3)
+    const leftoverParticipants = shuffledParticipants.slice(participantIndex);
+    const teamKeys = Array.from(gameState.teams.keys());
+    
+    leftoverParticipants.forEach((participant, index) => {
+      // Only add if the target team has less than 3 members
+      const targetTeamId = teamKeys[index % teamKeys.length];
+      const targetTeam = gameState.teams.get(targetTeamId);
+      
+      if (targetTeam.members.length < maxTeamSize) {
+        targetTeam.members.push(participant);
+      } else {
+        // If all teams are full, create a new team with remaining participants
+        const newTeamId = `team-${gameState.teams.size + 1}`;
+        const newTeam = {
+          id: newTeamId,
+          name: `Team ${gameState.teams.size + 1}`,
+          members: [participant],
+          totalScore: 0
+        };
+        gameState.teams.set(newTeamId, newTeam);
+        gameState.teamScores.set(newTeamId, 0);
+      }
+    });
+  } else if (remainingParticipants > 0) {
+    // If no full teams but have remaining participants, create a team with them
+    const teamId = `team-1`;
+    const team = {
+      id: teamId,
+      name: `Team 1`,
+      members: shuffledParticipants.slice(participantIndex),
+      totalScore: 0
+    };
+    gameState.teams.set(teamId, team);
+    gameState.teamScores.set(teamId, 0);
+  }
+  
+  gameState.teamsFormed = true;
+  
+  // Log team formation
+  console.log('Teams formed:');
+  gameState.teams.forEach((team) => {
+    console.log(`${team.name}: ${team.members.map(m => m.name).join(', ')} (${team.members.length} members)`);
+  });
+}
+
+function generateGameSequence() {
+  const gameTypes = Object.keys(games);
+  gameState.gameSequence = [];
+  
+  for (let i = 0; i < gameState.totalRounds; i++) {
+    // Randomly select a game type for each round
+    const randomGameType = gameTypes[Math.floor(Math.random() * gameTypes.length)];
+    gameState.gameSequence.push(randomGameType);
+  }
+}
+
+function startNextRound() {
+  if (gameState.completedRounds >= gameState.totalRounds) {
+    endGame();
+    return;
+  }
+  
+  const currentGameType = gameState.gameSequence[gameState.completedRounds];
+  gameState.currentGame = currentGameType;
+  gameState.round = 0;
+  
+  // Start first question of the round
+  startNextQuestion();
+  
+  io.emit('round-started', {
+    roundNumber: gameState.completedRounds + 1,
+    gameType: currentGameType,
+    gameName: games[currentGameType].name,
+    totalRounds: gameState.totalRounds
+  });
+}
+
+function getParticipantTeam(participantId) {
+  for (const [teamId, team] of gameState.teams) {
+    if (team.members.some(member => member.id === participantId)) {
+      return teamId;
+    }
+  }
+  return null;
+}
+
 function startNextQuestion() {
   if (!gameState.currentGame || !games[gameState.currentGame]) return;
   
   const game = games[gameState.currentGame];
   if (gameState.round >= game.questions.length) {
-    endGame();
+    // Round completed, move to next round
+    gameState.completedRounds++;
+    startNextRound();
     return;
   }
   
   gameState.currentQuestion = game.questions[gameState.round];
   gameState.answers.clear();
-  gameState.timeLeft = parseInt(process.env.GAME_TIMER) || 30; // Timer from env or default 30 seconds
+  gameState.timeLeft = parseInt(process.env.GAME_TIMER) || 30;
   
   // Send question to all participants
   io.to('participants').emit('new-question', {
     question: gameState.currentQuestion,
     round: gameState.round + 1,
     totalRounds: game.questions.length,
-    timeLeft: gameState.timeLeft
+    timeLeft: gameState.timeLeft,
+    currentRound: gameState.completedRounds + 1,
+    totalGameRounds: gameState.totalRounds,
+    gameType: gameState.currentGame
   });
   
   // Send question to admin
@@ -212,7 +437,10 @@ function startNextQuestion() {
     question: gameState.currentQuestion,
     round: gameState.round + 1,
     totalRounds: game.questions.length,
-    timeLeft: gameState.timeLeft
+    timeLeft: gameState.timeLeft,
+    currentRound: gameState.completedRounds + 1,
+    totalGameRounds: gameState.totalRounds,
+    gameType: gameState.currentGame
   });
   
   // Start countdown timer
@@ -226,7 +454,7 @@ function startNextQuestion() {
     }
   }, 1000);
   
-  console.log(`Question ${gameState.round + 1} started`);
+  console.log(`Question ${gameState.round + 1} of round ${gameState.completedRounds + 1} started`);
 }
 
 function endCurrentQuestion() {
@@ -237,19 +465,24 @@ function endCurrentQuestion() {
   
   if (!gameState.currentQuestion) return;
   
-  // Calculate scores
+  // Calculate scores for teams
   const correctAnswer = gameState.currentQuestion.answer.toLowerCase();
   const results = [];
+  const teamAnswers = new Map(); // team id -> {correct answers count, total members}
+  
+  // Initialize team answer tracking
+  gameState.teams.forEach((team) => {
+    teamAnswers.set(team.id, { correctCount: 0, totalMembers: team.members.length });
+  });
   
   gameState.answers.forEach((answerData, participantId) => {
     const participant = gameState.participants.get(participantId);
     const isCorrect = answerData.answer === correctAnswer;
+    const teamId = getParticipantTeam(participantId);
     
-    if (isCorrect) {
-      // Award points based on speed (faster = more points)
-      const timeBonus = Math.max(0, gameState.timeLeft);
-      const points = 100 + timeBonus * 2;
-      gameState.scores.set(participantId, (gameState.scores.get(participantId) || 0) + points);
+    if (isCorrect && teamId) {
+      const teamData = teamAnswers.get(teamId);
+      teamData.correctCount++;
     }
     
     results.push({
@@ -257,18 +490,32 @@ function endCurrentQuestion() {
       participant: participant,
       answer: answerData.answer,
       isCorrect,
-      points: isCorrect ? 100 + Math.max(0, gameState.timeLeft) * 2 : 0
+      teamId: teamId
     });
   });
   
-  // Sort results by score for this round
-  results.sort((a, b) => b.points - a.points);
+  // Award points to teams based on correct answers percentage
+  teamAnswers.forEach((teamData, teamId) => {
+    const correctPercentage = teamData.correctCount / teamData.totalMembers;
+    let teamPoints = 0;
+    
+    if (correctPercentage >= 1.0) {
+      teamPoints = 100; // All members correct
+    } else if (correctPercentage >= 0.67) {
+      teamPoints = 75; // 2/3 or more correct
+    } else if (correctPercentage >= 0.33) {
+      teamPoints = 50; // 1/3 or more correct
+    }
+    
+    const currentScore = gameState.teamScores.get(teamId) || 0;
+    gameState.teamScores.set(teamId, currentScore + teamPoints);
+  });
   
-  // Create leaderboard
-  const leaderboard = Array.from(gameState.scores.entries())
-    .map(([participantId, score]) => ({
-      participant: gameState.participants.get(participantId),
-      score
+  // Create team leaderboard
+  const teamLeaderboard = Array.from(gameState.teams.entries())
+    .map(([teamId, team]) => ({
+      team: team,
+      score: gameState.teamScores.get(teamId) || 0
     }))
     .sort((a, b) => b.score - a.score);
   
@@ -276,14 +523,16 @@ function endCurrentQuestion() {
   io.emit('question-ended', {
     correctAnswer: gameState.currentQuestion.answer,
     results,
-    leaderboard,
-    round: gameState.round + 1
+    teamLeaderboard,
+    round: gameState.round + 1,
+    currentRound: gameState.completedRounds + 1,
+    totalGameRounds: gameState.totalRounds
   });
   
   gameState.round++;
   gameState.currentQuestion = null;
   
-  console.log(`Question ended. Results:`, results);
+  console.log(`Question ended. Team scores:`, Object.fromEntries(gameState.teamScores));
 }
 
 function endGame() {
@@ -291,25 +540,53 @@ function endGame() {
   gameState.currentGame = null;
   gameState.currentQuestion = null;
   gameState.round = 0;
+  gameState.completedRounds = 0;
   
   if (gameState.gameTimer) {
     clearInterval(gameState.gameTimer);
     gameState.gameTimer = null;
   }
   
-  // Final leaderboard
-  const finalLeaderboard = Array.from(gameState.scores.entries())
-    .map(([participantId, score]) => ({
-      participant: gameState.participants.get(participantId),
-      score
+  // Final team leaderboard
+  const finalTeamLeaderboard = Array.from(gameState.teams.entries())
+    .map(([teamId, team]) => ({
+      team: team,
+      score: gameState.teamScores.get(teamId) || 0
     }))
     .sort((a, b) => b.score - a.score);
   
   io.emit('game-ended', {
-    finalLeaderboard
+    finalTeamLeaderboard,
+    losingTeam: finalTeamLeaderboard[finalTeamLeaderboard.length - 1] // Team with lowest score
   });
   
-  console.log('Game ended');
+  console.log('Game ended. Final team standings:', finalTeamLeaderboard);
+}
+
+function resetGame() {
+  // Stop any active timer
+  if (gameState.gameTimer) {
+    clearInterval(gameState.gameTimer);
+    gameState.gameTimer = null;
+  }
+  
+  // Reset all game state
+  gameState.currentGame = null;
+  gameState.isActive = false;
+  gameState.round = 0;
+  gameState.totalRounds = 3; // Reset to default
+  gameState.participants.clear();
+  gameState.scores.clear();
+  gameState.teams.clear();
+  gameState.teamScores.clear();
+  gameState.teamsFormed = false;
+  gameState.currentQuestion = null;
+  gameState.answers.clear();
+  gameState.timeLeft = 0;
+  gameState.gameSequence = [];
+  gameState.completedRounds = 0;
+  
+  console.log('Game completely reset - all participants need to rejoin');
 }
 
 const PORT = process.env.PORT || 3001;
