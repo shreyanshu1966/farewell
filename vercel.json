@@ -1,9 +1,9 @@
 {
   "framework": "vite",
-  "buildCommand": "npm install && npm run build",
+  "buildCommand": "npm run build:vercel",
   "outputDirectory": "dist",
   "devCommand": "npm run dev",
-  "installCommand": "npm install",
+  "installCommand": "npm ci",
   "env": {
     "NODE_ENV": "production"
   },

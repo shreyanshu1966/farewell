@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
+    "build:vercel": "cross-env NODE_ENV=production vite build",
     "lint": "eslint .",
     "preview": "vite preview",
     "server": "cd server && npm run dev",
@@ -25,6 +26,7 @@
     "@vitejs/plugin-react": "^5.0.0",
     "autoprefixer": "^10.4.21",
     "concurrently": "^9.2.1",
+    "cross-env": "^10.0.0",
     "eslint": "^9.33.0",
     "eslint-plugin-react-hooks": "^5.2.0",
     "eslint-plugin-react-refresh": "^0.4.20",
