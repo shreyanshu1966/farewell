@@ -1,0 +1,18 @@
+@import 'tailwindcss/base';
+@import 'tailwindcss/components';
+@import 'tailwindcss/utilities';
+
+/* Ensure key Tailwind utilities are always included */
+.bg-gradient-to-br { background-image: linear-gradient(to bottom right, var(--tw-gradient-stops)); }
+.bg-gradient-to-r { background-image: linear-gradient(to right, var(--tw-gradient-stops)); }
+.from-indigo-500 { --tw-gradient-from: #6366f1; --tw-gradient-to: rgb(99 102 241 / 0); --tw-gradient-stops: var(--tw-gradient-from), var(--tw-gradient-to); }
+.via-purple-500 { --tw-gradient-to: rgb(168 85 247 / 0); --tw-gradient-stops: var(--tw-gradient-from), #a855f7, var(--tw-gradient-to); }
+.to-purple-600 { --tw-gradient-to: #9333ea; }
+.min-h-screen { min-height: 100vh; }
+.rounded-3xl { border-radius: 1.5rem; }
+.shadow-2xl { box-shadow: 0 25px 50px -12px rgb(0 0 0 / 0.25); }
+.text-white { color: rgb(255 255 255); }
+.text-gray-800 { color: rgb(31 41 55); }
+.font-bold { font-weight: 700; }
+.p-3 { padding: 0.75rem; }
+.text-2xl { font-size: 1.5rem; line-height: 2rem; }
